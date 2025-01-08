@@ -10,6 +10,7 @@ from queue import Queue
 import pystray
 from PIL import Image
 import os
+import sys
 
 # 配置
 GITHUB_DOMAINS = [
@@ -57,15 +58,20 @@ logging.basicConfig(
 )
 
 def ping_ip(ip, domain, app):
-    """使用ping命令检测IP延迟"""
+    """使用socket连接检测IP延迟"""
     try:
         # 更新状态为检测中
         app.update_status(domain, "检测中...", ip, "")
         
+        # 创建socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)  # 设置超时时间1秒
+        
+        # 测量TCP连接时间
         start = time.time()
-        result = subprocess.run(['ping', '-n', '1', '-w', '1000', ip],
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        sock.connect((ip, 80))  # 尝试连接80端口
         latency = (time.time() - start) * 1000  # 计算延迟时间（毫秒）
+        sock.close()
         return ip, latency
     except:
         return ip, float('inf')
@@ -136,10 +142,19 @@ class GitHubSpeedOptimizerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("GitHub Speed Optimizer")
-        self.root.geometry("800x600")
+        self.root.geometry("850x600")
         # 设置窗口图标
-        icon_path = os.path.join(os.path.dirname(__file__), "icon.ico")
-        self.root.iconbitmap(icon_path)
+        try:
+            # 打包后路径
+            base_path = sys._MEIPASS
+            icon_path = os.path.join(base_path, "icon.ico")
+            self.root.iconbitmap(icon_path)
+        except Exception:
+            # 开发环境路径
+            base_path = os.path.dirname(__file__)
+            icon_path = os.path.join(base_path, "icon.ico")
+            if os.path.exists(icon_path):
+                self.root.iconbitmap(icon_path)
         
         # 创建主框架
         self.main_frame = ttk.Frame(root, padding="10")
@@ -253,7 +268,14 @@ class GitHubSpeedOptimizerApp:
     def create_tray_icon(self):
         """创建系统托盘图标"""
         # 创建托盘图标
-        image = Image.open(os.path.join(os.path.dirname(__file__), "icon.ico"))
+        try:
+            # 打包后路径
+            base_path = sys._MEIPASS
+        except Exception:
+            # 开发环境路径
+            base_path = os.path.dirname(__file__)
+        icon_path = os.path.join(base_path, "icon.ico")
+        image = Image.open(icon_path)
         menu = (
             pystray.MenuItem('显示', self.restore_window),
             pystray.MenuItem('退出', self.quit_app)
