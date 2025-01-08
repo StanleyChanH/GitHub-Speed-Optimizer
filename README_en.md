@@ -21,10 +21,13 @@ A Windows desktop application for optimizing GitHub access speed by automaticall
 
 ## Installation
 
+### Download Software
+- [GitHub Releases](https://github.com/StanleyChanH/github-speed-optimizer/releases)
+
 ### Source Installation
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/github-speed-optimizer.git
+   git clone https://github.com/StanleyChanH/github-speed-optimizer.git
    cd github-speed-optimizer
    ```
 2. Install dependencies:

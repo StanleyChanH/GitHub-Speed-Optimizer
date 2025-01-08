@@ -20,10 +20,13 @@
 
 ## 安装
 
+### 下载软件
+- [GitHub Releases](https://github.com/StanleyChanH/github-speed-optimizer/releases)
+
 ### 源码安装
 1. 克隆本仓库：
    ```bash
-   git clone https://github.com/yourusername/github-speed-optimizer.git
+   git clone https://github.com/StanleyChanH/github-speed-optimizer.git
    cd github-speed-optimizer
    ```
 2. 安装依赖：
@@ -44,7 +47,7 @@
 
 ## 注意事项
 
-- 需要以管理员权限运行程序
+- 程序仅支持Windows系统
 - 修改hosts文件需要管理员权限
 - 建议保持程序后台运行以持续优化访问速度
 - 日志文件保存在程序目录下，最多保留100行
