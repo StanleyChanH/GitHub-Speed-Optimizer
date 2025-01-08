@@ -2,6 +2,8 @@ import time
 import socket
 import subprocess
 import logging
+import ctypes
+import os
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
@@ -44,15 +46,24 @@ GITHUB_DOMAINS = [
 ]
 
 DEFAULT_HOSTS_PATH = r'C:\Windows\System32\drivers\etc\hosts'
-CHECK_INTERVAL = 60  # 检查间隔，单位秒
-TIMEOUT = 5  # 延迟检测超时时间
+CHECK_INTERVAL = 300  # 检查间隔，单位秒
+TIMEOUT = 1  # 延迟检测超时时间
+
+from logging.handlers import RotatingFileHandler
 
 # 日志配置
+log_handler = RotatingFileHandler(
+    'github_speed_optimizer.log',
+    maxBytes=1024*100,  # 100KB
+    backupCount=1,
+    encoding='utf-8'
+)
+log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('github_speed_optimizer.log'),
+        log_handler,
         logging.StreamHandler()
     ]
 )
@@ -65,7 +76,7 @@ def ping_ip(ip, domain, app):
         
         # 创建socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(1)  # 设置超时时间1秒
+        sock.settimeout(2)  # 设置超时时间2秒
         
         # 测量TCP连接时间
         start = time.time()
@@ -73,7 +84,14 @@ def ping_ip(ip, domain, app):
         latency = (time.time() - start) * 1000  # 计算延迟时间（毫秒）
         sock.close()
         return ip, latency
-    except:
+    except socket.timeout:
+        app.update_status(domain, "响应超时", ip, "超时")
+        return ip, float('inf')
+    except socket.error as e:
+        app.update_status(domain, f"连接错误: {str(e)}", ip, "错误")
+        return ip, float('inf')
+    except Exception as e:
+        logging.error(f"Error pinging {ip} for {domain}: {str(e)}")
         return ip, float('inf')
 
 def get_best_ip(domain, app):
@@ -104,39 +122,76 @@ def get_best_ip(domain, app):
             if latency != float('inf'):
                 results.append((ip, latency))
         
-        # 返回延迟最低的IP
+        # 返回延迟最低的IP，如果没有有效结果则返回None
         if results:
             return min(results, key=lambda x: x[1])
-        return None
+        return None  # 没有有效IP时返回None
     except Exception as e:
         logging.error(f"Error getting best IP for {domain}: {str(e)}")
         return None
 
-def update_hosts(domain, ip, hosts_path):
+def update_hosts(domain, ip, hosts_path, app=None):
     """更新hosts文件"""
     try:
         # 读取现有hosts内容
-        with open(hosts_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        existing_lines = []
+        if os.path.exists(hosts_path):
+            with open(hosts_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.rstrip()  # 保留行尾空白
+                    if not line or line.startswith('#'):
+                        # 保留注释和空行
+                        existing_lines.append(line)
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        current_ip = parts[0]
+                        hostnames = parts[1:]
+                        # 只保留非GitHub相关的条目
+                        if not any(d in GITHUB_DOMAINS for d in hostnames):
+                            existing_lines.append(line)
         
-        # 删除旧的GitHub相关条目
-        new_lines = []
-        for line in lines:
-            if not any(d in line for d in GITHUB_DOMAINS):
-                new_lines.append(line)
+        # 收集GitHub域名和最佳IP的映射
+        github_entries = []
+        for github_domain in GITHUB_DOMAINS:
+            # 获取该域名的最佳IP
+            best_ip_result = get_best_ip(github_domain, app)
+            if best_ip_result:
+                best_ip, latency = best_ip_result
+                # 只写入有效IP（延迟不为无穷大）
+                if latency != float('inf'):
+                    github_entries.append((best_ip, github_domain))
+                else:
+                    logging.warning(f"No valid IP found for {github_domain}")
+            else:
+                logging.warning(f"Failed to get IP for {github_domain}")
         
-        # 添加新的条目
-        new_lines.append(f"{ip} {domain}\n")
+        # 直接写入hosts文件
+        with open(hosts_path, 'w', encoding='utf-8', newline='\r\n') as f:
+            # 写入原有内容
+            for line in existing_lines:
+                # 跳过已有的GitHub优化注释
+                if not line.startswith("# GitHub Speed Optimizer"):
+                    f.write(line + "\n")
+            
+            # 写入新的GitHub优化注释
+            if github_entries:
+                f.write("# GitHub Speed Optimizer - Updated at " + 
+                       datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\n")
+            
+            # 写入GitHub域名和最佳IP，每个域名单独一行
+            for ip_address, domain in github_entries:
+                f.write(f"{ip_address} {domain}\n")
+            
+            # 确保文件以空行结尾
+            f.write("\n")
         
-        # 写入hosts文件
-        with open(hosts_path, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
+        logging.info(f"Successfully updated hosts: {ip} {domain}")
+        return True
         
-        logging.info(f"Updated hosts: {ip} {domain}")
-    except PermissionError:
-        logging.error("Permission denied. Please run the script as Administrator.")
     except Exception as e:
         logging.error(f"Error updating hosts file: {str(e)}")
+        return False
 
 class GitHubSpeedOptimizerApp:
     def __init__(self, root):
@@ -197,22 +252,21 @@ class GitHubSpeedOptimizerApp:
                 ""
             ))
         
-        # 控制面板
-        self.control_frame = ttk.Frame(self.main_frame)
-        self.control_frame.pack(fill=tk.X, pady=10)
+        # 控制面板 - 第一行
+        self.control_frame_top = ttk.Frame(self.main_frame)
+        self.control_frame_top.pack(fill=tk.X, pady=(10, 5))
         
         # Hosts文件路径设置
-        self.hosts_frame = ttk.LabelFrame(self.control_frame, text="Hosts文件路径")
-        self.hosts_frame.pack(side=tk.LEFT, padx=5)
+        self.hosts_frame = ttk.LabelFrame(self.control_frame_top, text="Hosts文件路径")
+        self.hosts_frame.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
         self.hosts_path_var = tk.StringVar(value=DEFAULT_HOSTS_PATH)
         self.hosts_entry = ttk.Entry(self.hosts_frame, 
-                                   textvariable=self.hosts_path_var,
-                                   width=30)
-        self.hosts_entry.pack(side=tk.LEFT, padx=5)
+                                   textvariable=self.hosts_path_var)
+        self.hosts_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
         # 间隔时间设置
-        self.interval_frame = ttk.LabelFrame(self.control_frame, text="检测间隔（秒）")
+        self.interval_frame = ttk.LabelFrame(self.control_frame_top, text="检测间隔（秒）")
         self.interval_frame.pack(side=tk.LEFT, padx=5)
         
         self.interval_var = tk.IntVar(value=CHECK_INTERVAL)
@@ -221,31 +275,44 @@ class GitHubSpeedOptimizerApp:
                                       width=5)
         self.interval_entry.pack(side=tk.LEFT, padx=5)
         
-        # 控制按钮
-        self.button_frame = ttk.Frame(self.control_frame)
-        self.button_frame.pack(side=tk.LEFT, padx=10)
+        # 控制面板 - 第二行
+        self.control_frame_bottom = ttk.Frame(self.main_frame)
+        self.control_frame_bottom.pack(fill=tk.X, pady=(5, 10))
         
-        self.start_button = ttk.Button(self.button_frame, text="开始", command=self.start)
+        # 控制按钮和进度条容器
+        self.button_frame = ttk.Frame(self.control_frame_bottom)
+        self.button_frame.pack(fill=tk.X, expand=True, padx=10)
+        
+        # 按钮容器
+        self.button_container = ttk.Frame(self.button_frame)
+        self.button_container.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # 第一行按钮
+        self.button_row1 = ttk.Frame(self.button_container)
+        self.button_row1.pack(side=tk.TOP, pady=2)
+        
+        self.start_button = ttk.Button(self.button_row1, text="开始", command=self.start)
         self.start_button.pack(side=tk.LEFT, padx=5)
         
-        self.stop_button = ttk.Button(self.button_frame, text="停止", command=self.stop, state=tk.DISABLED)
+        self.stop_button = ttk.Button(self.button_row1, text="停止", command=self.stop, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=5)
         
-        # 添加后台运行按钮
-        self.minimize_button = ttk.Button(self.button_frame, text="后台运行", command=self.minimize_to_tray)
+        self.minimize_button = ttk.Button(self.button_row1, text="后台运行", command=self.minimize_to_tray)
         self.minimize_button.pack(side=tk.LEFT, padx=5)
         
         # 状态显示标签
-        self.status_label = ttk.Label(self.button_frame, text="等待检测", foreground="gray")
+        self.status_label = ttk.Label(self.button_container, text="等待检测", foreground="gray")
         self.status_label.pack(side=tk.LEFT, padx=5)
+        
+        # 进度条
+        self.progress = ttk.Progressbar(self.button_frame,
+                                      mode='determinate',
+                                      maximum=len(GITHUB_DOMAINS))
+        self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
         self.running = False
         self.worker_queue = Queue()
         self.workers = []
-        self.progress = ttk.Progressbar(self.control_frame, 
-                                      mode='determinate',
-                                      maximum=len(GITHUB_DOMAINS))
-        self.progress.pack(side=tk.LEFT, padx=10)
         
     def start(self):
         self.running = True
@@ -332,11 +399,28 @@ class GitHubSpeedOptimizerApp:
         
     def process_results(self):
         """处理检测结果"""
+        start_time = time.time()
+        timeout = 30  # 最多等待30秒
+        
         while self.running and any(w.is_alive() for w in self.workers):
+            # 检查超时
+            if time.time() - start_time > timeout:
+                logging.warning("检测超时，强制终止线程")
+                for worker in self.workers:
+                    if worker.is_alive():
+                        try:
+                            worker.join(0.1)  # 尝试优雅地结束线程
+                        except Exception as e:
+                            logging.error(f"终止线程时出错: {str(e)}")
+                break
+                
             time.sleep(0.1)
             self.root.update()
             
         if self.running:
+            # 清理线程
+            self.workers = []
+            
             # 设置下次检测
             self.status_label.config(text="等待下次检测", foreground="gray")
             interval = self.interval_var.get() * 1000
@@ -350,7 +434,7 @@ class GitHubSpeedOptimizerApp:
         if result:
             ip, latency = result
             # 更新hosts文件
-            update_hosts(domain, ip, self.hosts_path_var.get())
+            update_hosts(domain, ip, self.hosts_path_var.get(), self)
             # 更新状态为完成
             self.update_status(domain, "完成", ip, latency)
             # 更新进度条
@@ -366,25 +450,27 @@ class GitHubSpeedOptimizerApp:
     def update_status(self, domain, status, best_ip, latency):
         item_id = self.tree.get_children()[GITHUB_DOMAINS.index(domain)]
         
-        # 设置延迟颜色
-        latency_color = "black"
-        if isinstance(latency, (int, float)):
+        # 设置状态颜色
+        status_color = "black"
+        if status == "响应超时":
+            status_color = "red"
+        elif isinstance(latency, (int, float)):
             if latency < 100:
-                latency_color = "green"
+                status_color = "green"
             elif latency < 300:
-                latency_color = "orange"
+                status_color = "orange"
             else:
-                latency_color = "red"
+                status_color = "red"
                 
         self.tree.item(item_id, values=(
             domain,
             status,
             best_ip,
-            f"{latency:.2f}ms" if isinstance(latency, (int, float)) else ""
+            f"{latency:.2f}ms" if isinstance(latency, (int, float)) else str(latency)
         ))
         
-        self.tree.tag_configure(latency_color, foreground=latency_color)
-        self.tree.item(item_id, tags=(latency_color,))
+        self.tree.tag_configure(status_color, foreground=status_color)
+        self.tree.item(item_id, tags=(status_color,))
         
         self.status_data[domain] = {
             "status": status,
@@ -392,10 +478,7 @@ class GitHubSpeedOptimizerApp:
             "latency": latency
         }
 
-def main():
+if __name__ == "__main__":
     root = tk.Tk()
     app = GitHubSpeedOptimizerApp(root)
     root.mainloop()
-
-if __name__ == '__main__':
-    main()
