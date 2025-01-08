@@ -400,7 +400,7 @@ class GitHubSpeedOptimizerApp:
     def process_results(self):
         """处理检测结果"""
         start_time = time.time()
-        timeout = 30  # 最多等待30秒
+        timeout = 60  # 最多等待60秒
         
         while self.running and any(w.is_alive() for w in self.workers):
             # 检查超时
