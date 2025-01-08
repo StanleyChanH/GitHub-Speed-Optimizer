@@ -6,6 +6,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 一个用于优化GitHub访问速度的Windows桌面应用程序，通过自动检测并更新最快的GitHub IP地址到hosts文件，解决GitHub访问速度慢、无法访问的问题。
+**点个Star支持一下吧**
 
 ## 功能特性
 
@@ -18,17 +19,20 @@
 
 ## 安装
 
+### 下载安装包
+- 在release页面下载最新版安装包
+- 双击运行GitHubSpeedOptimizer.exe
+
+### 源码安装
 1. 克隆本仓库：
    ```bash
    git clone https://github.com/yourusername/github-speed-optimizer.git
    cd github-speed-optimizer
    ```
-
 2. 安装依赖：
    ```bash
    pip install -r requirements.txt
    ```
-
 3. 运行程序：
    ```bash
    python github_speed_optimizer.py
